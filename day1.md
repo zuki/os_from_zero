@@ -12,7 +12,7 @@ Macで作成
 
 ```
 $ dd if=/dev/zero of=./BOOTX64.EFI ibs=0x600 count=1
-$ 0XED
+$ open 0XED
 $ scp BOOTX64.EFI ubuntu18:/home/vagrant/mikan/book/day1/
 ```
 
@@ -81,6 +81,8 @@ $ qemu-system-x86_64 -drive if=pflash,file=$HOME/mikan/osbook/devenv/OVMF_CODE.f
 - ブートロダの名前を`hello.efi`のままで実行したら、`hello world!`は現れず。
 - BOOTX64.EFIにrenameしたところ表示された。
 - `run_qemu.sh`を使用した場合も問題なく表示された。
+
+**注** ブートローダ名がBOOTX64.EFIでないといけないのは、UEFI仕様書3.5.1.1に書いてあった。
 
 ```
 $ $HOME/mikan/osbook/devenv/run_qemu.sh hello.efi
