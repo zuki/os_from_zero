@@ -202,3 +202,9 @@ Index, Type, Type(name), PhysicalStart, NumberOfPages, Attribute
 ```
 
 ![メモリマップ出力](images/day2_memmap.png)
+
+**注**: Main.cに追加されたコードに頻出する`// #@@range_begin()`と`// #@@range_end()`の組は
+EDK IIで何らかのattributeを付ける記法かなと思っていたが、どうやる[Re:VIEW](https://reviewml.org/ja/)
+という電子・紙書籍制作ツールでファイルの一部を抜粋するための記法のようだ。今後は無視する（実際、range_startとtypoしてたが実行に問題はなかった。まあ、Cから見れば単なるコメントか）。
+
+参照: [review-preproc ユーザガイド](https://github.com/kmuto/review/blob/master/doc/preproc.ja.md)
