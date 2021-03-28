@@ -1,0 +1,83 @@
+diff --git a/devenv/buildenv.sh b/devenv/buildenv.sh
+index beba499..4c3ca86 100644
+--- a/devenv/buildenv.sh
++++ b/devenv/buildenv.sh
+@@ -1,5 +1,5 @@
+ # Usage: source buildenv.sh
+ 
+-BASEDIR="$HOME/osbook/devenv/x86_64-elf"
++BASEDIR="$HOME/mikan/osbook/devenv/x86_64-elf"
+ export CPPFLAGS="-I$BASEDIR/include/c++/v1 -I$BASEDIR/include -I$BASEDIR/include/freetype2 -nostdlibinc -D__ELF__ -D_LDBL_EQ_DBL -D_GNU_SOURCE -D_POSIX_TIMERS"
+ export LDFLAGS="-L$BASEDIR/lib"
+diff --git a/devenv/make_image.sh b/devenv/make_image.sh
+index 1f99933..e547ae2 100755
+--- a/devenv/make_image.sh
++++ b/devenv/make_image.sh
+@@ -23,11 +23,21 @@ qemu-img create -f raw $DISK_IMG 200M
+ mkfs.fat -n 'MIKAN OS' -s 2 -f 2 -R 32 -F 32 $DISK_IMG
+ 
+ $DEVENV_DIR/mount_image.sh $DISK_IMG $MOUNT_POINT
+-sudo mkdir -p $MOUNT_POINT/EFI/BOOT
+-sudo cp $EFI_FILE $MOUNT_POINT/EFI/BOOT/BOOTX64.EFI
++if [`uname` = 'Darwin' ]; then
++    mkdir -p $MOUNT_POINT/EFI/BOOT
++    cp $EFI_FILE $MOUNT_POINT/EFI/BOOT/BOOTX64.EFI
++else
++    sudo mkdir -p $MOUNT_POINT/EFI/BOOT
++    sudo cp $EFI_FILE $MOUNT_POINT/EFI/BOOT/BOOTX64.EFI
++fi
++
+ if [ "$ANOTHER_FILE" != "" ]
+ then
+     sudo cp $ANOTHER_FILE $MOUNT_POINT/
+ fi
+ sleep 0.5
+-sudo umount $MOUNT_POINT
++if [`uname` = 'Darwin' ]; then
++    hdiutil detach $MOUNT_POINT
++else
++    sudo umount $MOUNT_POINT
++fi
+diff --git a/devenv/make_mikanos_image.sh b/devenv/make_mikanos_image.sh
+index 4607e28..36f6072 100755
+--- a/devenv/make_mikanos_image.sh
++++ b/devenv/make_mikanos_image.sh
+@@ -15,10 +15,10 @@ then
+       echo "Usage: $0 <day>"
+       exit 1
+   fi
+-  MIKANOS_DIR="$HOME/osbook/$1"
++  MIKANOS_DIR="$HOME/mikan/osbook/$1"
+ fi
+ 
+-LOADER_EFI="$HOME/edk2/Build/MikanLoaderX64/DEBUG_CLANG38/X64/Loader.efi"
++LOADER_EFI="$HOME/mikan/edk2/Build/MikanLoaderX64/DEBUG_CLANG38/X64/Loader.efi"
+ KERNEL_ELF="$MIKANOS_DIR/kernel/kernel.elf"
+ 
+ $DEVENV_DIR/make_image.sh $DISK_IMG $MOUNT_POINT $LOADER_EFI $KERNEL_ELF
+@@ -43,4 +43,8 @@ then
+ fi
+ 
+ sleep 0.5
+-sudo umount $MOUNT_POINT
++if [`uname` = 'Darwin' ]; then
++    hdiutil detach $MOUNT_POINT
++else
++  sudo umount $MOUNT_POINT
++fi
+diff --git a/devenv/mount_image.sh b/devenv/mount_image.sh
+index ba8233e..7a9b5d2 100755
+--- a/devenv/mount_image.sh
++++ b/devenv/mount_image.sh
+@@ -16,5 +16,9 @@ then
+     exit 1
+ fi
+ 
+-mkdir -p $MOUNT_POINT
+-sudo mount -o loop $DISK_IMG $MOUNT_POINT
++if [`uname` = 'Darwin' ]; then
++    hdiutil attach -mountpoint $MOUNT_POINT $DISK_IMG
++else
++    mkdir -p $MOUNT_POINT
++    sudo mount -o loop $DISK_IMG $MOUNT_POINT
++fi
