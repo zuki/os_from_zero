@@ -591,3 +591,133 @@ Program Headers:
   LOAD           0x0000b0 0x00000000001000b0 0x00000000001000b0 0x000013 0x000013 R E 0x10
   GNU_STACK      0x000000 0x0000000000000000 0x0000000000000000 0x000000 0x000000 RW  0x0
 ```
+
+# 4.5 ローダを改良する
+
+エントリポイントの問題は解決し、処理も途中で止まらなくなったが、ブートローダから引数が渡らないか、
+フレームバッファにアクセスできないのか、カーネルからの画面描写ができない、
+
+```
+(qemu) info registers
+RAX=0000000000102300 RBX=0000000000000064 RCX=000000003fea47f8 RDX=000000000000031c
+RSI=00000000000000c7 RDI=0000000000000000 RBP=000000003fea4820 RSP=000000003fea47f0
+R8 =000000003fea47b4 R9 =000000003fb7b48f R10=000000003fbcd018 R11=fffffffffffffffc
+R12=0000000000102398 R13=000000003f226a20 R14=000000003fea47f8 R15=00000000000000c8
+RIP=00000000001012e1 RFL=00000046 [---Z-P-] CPL=0 II=0 A20=1 SMM=0 HLT=1
+ES =0030 0000000000000000 ffffffff 00cf9300 DPL=0 DS   [-WA]
+CS =0038 0000000000000000 ffffffff 00af9a00 DPL=0 CS64 [-R-]
+SS =0030 0000000000000000 ffffffff 00cf9300 DPL=0 DS   [-WA]
+DS =0030 0000000000000000 ffffffff 00cf9300 DPL=0 DS   [-WA]
+FS =0030 0000000000000000 ffffffff 00cf9300 DPL=0 DS   [-WA]
+GS =0030 0000000000000000 ffffffff 00cf9300 DPL=0 DS   [-WA]
+LDT=0000 0000000000000000 0000ffff 00008200 DPL=0 LDT
+TR =0000 0000000000000000 0000ffff 00008b00 DPL=0 TSS64-busy
+GDT=     000000003fbee698 00000047
+IDT=     000000003f306018 00000fff
+CR0=80010033 CR2=0000000000000000 CR3=000000003fc01000 CR4=00000668
+DR0=0000000000000000 DR1=0000000000000000 DR2=0000000000000000 DR3=0000000000000000
+DR6=00000000ffff0ff0 DR7=0000000000000400
+EFER=0000000000000500
+FCW=037f FSW=0000 [ST=0] FTW=00 MXCSR=00001f80
+FPR0=0000000000000000 0000 FPR1=0000000000000000 0000
+FPR2=0000000000000000 0000 FPR3=0000000000000000 0000
+FPR4=0000000000000000 0000 FPR5=0000000000000000 0000
+FPR6=0000000000000000 0000 FPR7=0000000000000000 0000
+XMM00=00000000000000000000000000000000 XMM01=00000000000000000000000000000000
+XMM02=00000000000000000000000000000000 XMM03=00000000000000000000000000000000
+XMM04=00000000000000000000000000000000 XMM05=00000000000000000000000000000000
+XMM06=00000000000000000000000000000000 XMM07=00000000000000000000000000000000
+XMM08=00000000000000000000000000000000 XMM09=00000000000000000000000000000000
+XMM10=00000000000000000000000000000000 XMM11=00000000000000000000000000000000
+XMM12=00000000000000000000000000000000 XMM13=00000000000000000000000000000000
+XMM14=00000000000000000000000000000000 XMM15=00000000000000000000000000000000
+(qemu) x /74i 0x1011d0
+0x001011d0:  55                       pushq    %rbp
+0x001011d1:  48 89 e5                 movq     %rsp, %rbp
+0x001011d4:  41 57                    pushq    %r15
+0x001011d6:  41 56                    pushq    %r14
+0x001011d8:  41 54                    pushq    %r12
+0x001011da:  53                       pushq    %rbx
+0x001011db:  48 83 ec 10              subq     $0x10, %rsp
+0x001011df:  49 89 fe                 movq     %rdi, %r14
+0x001011e2:  8b 47 14                 movl     0x14(%rdi), %eax
+0x001011e5:  85 c0                    testl    %eax, %eax
+0x001011e7:  74 0c                    je       0x1011f5
+0x001011e9:  83 f8 01                 cmpl     $1, %eax
+0x001011ec:  75 25                    jne      0x101213
+0x001011ee:  b8 90 01 10 00           movl     $0x100190, %eax
+0x001011f3:  eb 05                    jmp      0x1011fa
+0x001011f5:  b8 68 01 10 00           movl     $0x100168, %eax
+0x001011fa:  4c 89 35 87 11 00 00     movq     %r14, 0x1187(%rip)
+0x00101201:  48 89 05 78 11 00 00     movq     %rax, 0x1178(%rip)
+0x00101208:  48 c7 05 7d 11 00 00 80  movq     $0x102380, 0x117d(%rip)
+0x00101210:  23 10 00
+0x00101213:  41 8b 46 0c              movl     0xc(%r14), %eax    #
+0x00101217:  85 c0                    testl    %eax, %eax
+0x00101219:  74 65                    je       0x101280
+0x0010121b:  41 8b 4e 10              movl     0x10(%r14), %ecx
+0x0010121f:  45 31 e4                 xorl     %r12d, %r12d
+0x00101222:  4c 8d 7d d0              leaq     -0x30(%rbp), %r15
+0x00101226:  eb 11                    jmp      0x101239
+0x00101228:  0f 1f 84 00 00 00 00 00  nopl     (%rax, %rax)
+0x00101230:  41 83 c4 01              addl     $1, %r12d
+0x00101234:  41 39 c4                 cmpl     %eax, %r12d
+0x00101237:  73 47                    jae      0x101280
+0x00101239:  85 c9                    testl    %ecx, %ecx
+0x0010123b:  b9 00 00 00 00           movl     $0, %ecx
+0x00101240:  74 ee                    je       0x101230
+0x00101242:  31 db                    xorl     %ebx, %ebx
+0x00101244:  66 2e 0f 1f 84 00 00 00  nopw     %cs:(%rax, %rax)
+0x0010124c:  00 00
+0x0010124e:  66 90                    nop
+0x00101250:  48 8b 3d 39 11 00 00     movq     0x1139(%rip), %rdi
+0x00101257:  66 c7 45 d0 ff ff        movw     $0xffff, -0x30(%rbp)
+0x0010125d:  c6 45 d2 ff              movb     $0xff, -0x2e(%rbp)
+0x00101261:  48 8b 07                 movq     (%rdi), %rax
+0x00101264:  44 89 e6                 movl     %r12d, %esi
+0x00101267:  89 da                    movl     %ebx, %edx
+0x00101269:  4c 89 f9                 movq     %r15, %rcx
+0x0010126c:  ff 50 10                 callq    *0x10(%rax)
+0x0010126f:  83 c3 01                 addl     $1, %ebx
+0x00101272:  41 8b 4e 10              movl     0x10(%r14), %ecx
+0x00101276:  39 cb                    cmpl     %ecx, %ebx
+0x00101278:  72 d6                    jb       0x101250
+0x0010127a:  41 8b 46 0c              movl     0xc(%r14), %eax
+0x0010127e:  eb b0                    jmp      0x101230
+0x00101280:  45 31 ff                 xorl     %r15d, %r15d
+0x00101283:  4c 8d 75 d8              leaq     -0x28(%rbp), %r14
+0x00101287:  66 0f 1f 84 00 00 00 00  nopw     (%rax, %rax)
+0x0010128f:  00
+0x00101290:  31 db                    xorl     %ebx, %ebx
+0x00101292:  66 2e 0f 1f 84 00 00 00  nopw     %cs:(%rax, %rax)
+0x0010129a:  00 00
+0x0010129c:  0f 1f 40 00              nopl     (%rax)
+0x001012a0:  48 8b 3d e9 10 00 00     movq     0x10e9(%rip), %rdi
+0x001012a7:  66 c7 45 d8 00 ff        movw     $0xff00, -0x28(%rbp)
+0x001012ad:  c6 45 da 00              movb     $0, -0x26(%rbp)
+0x001012b1:  48 8b 07                 movq     (%rdi), %rax
+0x001012b4:  44 89 fe                 movl     %r15d, %esi
+0x001012b7:  89 da                    movl     %ebx, %edx
+0x001012b9:  4c 89 f1                 movq     %r14, %rcx
+0x001012bc:  ff 50 10                 callq    *0x10(%rax)
+0x001012bf:  83 c3 01                 addl     $1, %ebx
+0x001012c2:  83 fb 64                 cmpl     $0x64, %ebx
+0x001012c5:  75 d9                    jne      0x1012a0
+0x001012c7:  41 83 c7 01              addl     $1, %r15d
+0x001012cb:  41 81 ff c8 00 00 00     cmpl     $0xc8, %r15d
+0x001012d2:  75 bc                    jne      0x101290
+0x001012d4:  66 2e 0f 1f 84 00 00 00  nopw     %cs:(%rax, %rax)
+0x001012dc:  00 00
+0x001012de:  66 90                    nop
+0x001012e0:  f4                       hlt
+0x001012e1:  eb fd                    jmp      0x1012e0
+```
+
+![ローダ改良後の画面](images/day4_newloader_mac.png)
+
+- 命令は最後まで実行されているがOSによる描画はできていない
+
+
+```
+qemu-system-x86_64 -m 1G -drive if=pflash,format=raw,readonly,file=/Users/dspace/mikan/osbook/devenv/OVMF_CODE.fd -drive if=pflash,format=raw,file=/Users/dspace/mikan/osbook/devenv/OVMF_VARS.fd -drive if=ide,index=0,media=disk,format=raw,file=./disk.img -device nec-usb-xhci,id=xhci -device usb-mouse -device usb-kbd -monitor stdio
+```
