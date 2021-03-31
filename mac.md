@@ -721,3 +721,300 @@ XMM14=00000000000000000000000000000000 XMM15=00000000000000000000000000000000
 ```
 qemu-system-x86_64 -m 1G -drive if=pflash,format=raw,readonly,file=/Users/dspace/mikan/osbook/devenv/OVMF_CODE.fd -drive if=pflash,format=raw,file=/Users/dspace/mikan/osbook/devenv/OVMF_VARS.fd -drive if=ide,index=0,media=disk,format=raw,file=./disk.img -device nec-usb-xhci,id=xhci -device usb-mouse -device usb-kbd -monitor stdio
 ```
+
+## `-mabi=sysv`を付け、KernelMain()呼び出し時のレジスタを見る
+
+```
+$ cat main.cpp
+extern "C" void KernelMain(const FrameBufferConfig& frame_buffer_config)
+{
+    while (1) __asm__("hlt");
+}
+
+$ llvm-objdump -D kernel.elf
+00000000001024d0 <KernelMain>:
+  1024d0: 55                            pushq   %rbp
+  1024d1: 48 89 e5                      movq    %rsp, %rbp
+  1024d4: 66 2e 0f 1f 84 00 00 00 00 00 nopw    %cs:(%rax,%rax)
+  1024de: 66 90                         nop
+  1024e0: f4                            hlt
+  1024e1: eb fd                         jmp 0x1024e0 <KernelMain+0x10>
+
+(qemu) info registers
+RAX=00000000001024d0 RBX=0000000000000004 RCX=000000003feac8c0 RDX=0000000000000001
+RSI=0000000000000000 RDI=000000000010e750 RBP=000000003fea4820 RSP=000000003fea4820
+R8 =000000003fea47b4 R9 =000000003fb7b48f R10=000000003fbcd018 R11=fffffffffffffffc
+R12=000000000010e754 R13=000000003f226a20 R14=000000003f226f18 R15=000000003e681018
+RIP=00000000001024e1 RFL=00000006 [-----P-] CPL=0 II=0 A20=1 SMM=0 HLT=1
+
+(qemu) x /32xb 0x10e740                                     # <= ($rdi)
+000000000010e740: 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00
+000000000010e748: 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00
+000000000010e750: 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00
+000000000010e758: 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00
+(qemu) x /32xb 0x3fea4800
+000000003fea4800: 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00
+000000003fea4808: 0x54 0xe7 0x10 0x00 0x00 0x00 0x00 0x00
+000000003fea4810: 0x20 0x6a 0x22 0x3f 0x00 0x00 0x00 0x00
+000000003fea4818: 0x18 0x6f 0x22 0x3f 0x00 0x00 0x00 0x00
+(qemu) x /128xb 0x10bd60                                    # <= font start
+000000000010bd60: 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00
+000000000010bd68: 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00
+000000000010bd70: 0x10 0x10 0x38 0x38 0x7c 0x7c 0xfe 0xfe
+000000000010bd78: 0x7c 0x7c 0x38 0x38 0x10 0x10 0x00 0x00
+000000000010bd80: 0x55 0xaa 0x55 0xaa 0x55 0xaa 0x55 0xaa
+000000000010bd88: 0x55 0xaa 0x55 0xaa 0x55 0xaa 0x00 0x00
+
+(qemu) x /32xb 0x3feac8c0                                   # <= $rcx = struct *FrameBufferConfig
+000000003feac8c0: 0x00 0x00 0x00 0x80 0x00 0x00 0x00 0x00   # <= 0x80000000 = frame_buffer
+000000003feac8c8: 0x20 0x03 0x00 0x00 0x20 0x03 0x00 0x00   # <= 0x320, 0x320 = pixels_per_scan_line, horizontal_resolution
+000000003feac8d0: 0x58 0x02 0x00 0x00 0x01 0x00 0x00 0x00   # <= 0x258, 0x01 = vertical_resolution, pixel_format
+
+```
+
+## ブートローダからカーネルに渡す引数を変更
+
+```
+$ cat Main.c
+    typedef void EntryPointType(int a, int b);
+    EntryPointType *entry_point = (EntryPointType *)entry_addr;
+    entry_point(1, 2);
+
+$ cat main.cpp
+extern "C" void KernelMain(int a, int b)
+{
+    int c;
+    c = a + b;
+    while (1) __asm__("hlt");
+}
+
+(qemu) info registers
+RAX=000000000010e9f0 RBX=0000000000000004 RCX=0000000000000001 RDX=0000000000000002     # $rcx, $rdxに引数があるように見える
+RSI=0000000000000000 RDI=000000000010e9f0 RBP=000000003fea4820 RSP=000000003fea4814     # $rdi, $rsi 共に指定した値でない
+R8 =000000003fea47b4 R9 =000000003fb7b48f R10=000000003fbcd018 R11=fffffffffffffffc
+R12=000000000010e9f4 R13=000000003f226a20 R14=000000003f226f18 R15=000000003e682018
+RIP=00000000001025d8 RFL=00000006 [-----P-] CPL=0 II=0 A20=1 SMM=0 HLT=1
+ES =0030 0000000000000000 ffffffff 00cf9300 DPL=0 DS   [-WA]
+CS =0038 0000000000000000 ffffffff 00af9a00 DPL=0 CS64 [-R-]
+SS =0030 0000000000000000 ffffffff 00cf9300 DPL=0 DS   [-WA]
+DS =0030 0000000000000000 ffffffff 00cf9300 DPL=0 DS   [-WA]
+FS =0030 0000000000000000 ffffffff 00cf9300 DPL=0 DS   [-WA]
+GS =0030 0000000000000000 ffffffff 00cf9300 DPL=0 DS   [-WA]
+LDT=0000 0000000000000000 0000ffff 00008200 DPL=0 LDT
+TR =0000 0000000000000000 0000ffff 00008b00 DPL=0 TSS64-busy
+GDT=     000000003fbee698 00000047
+IDT=     000000003f306018 00000fff
+CR0=80010033 CR2=0000000000000000 CR3=000000003fc01000 CR4=00000668
+DR0=0000000000000000 DR1=0000000000000000 DR2=0000000000000000 DR3=0000000000000000
+DR6=00000000ffff0ff0 DR7=0000000000000400
+EFER=0000000000000500
+FCW=037f FSW=0000 [ST=0] FTW=00 MXCSR=00001f80
+FPR0=0000000000000000 0000 FPR1=0000000000000000 0000
+FPR2=0000000000000000 0000 FPR3=0000000000000000 0000
+FPR4=0000000000000000 0000 FPR5=0000000000000000 0000
+FPR6=0000000000000000 0000 FPR7=0000000000000000 0000
+XMM00=00000000000000000000000000000000 XMM01=00000000000000000000000000000000
+XMM02=00000000000000000000000000000000 XMM03=00000000000000000000000000000000
+XMM04=00000000000000000000000000000000 XMM05=00000000000000000000000000000000
+XMM06=00000000000000000000000000000000 XMM07=00000000000000000000000000000000
+XMM08=00000000000000000000000000000000 XMM09=00000000000000000000000000000000
+XMM10=00000000000000000000000000000000 XMM11=00000000000000000000000000000000
+XMM12=00000000000000000000000000000000 XMM13=00000000000000000000000000000000
+XMM14=00000000000000000000000000000000 XMM15=00000000000000000000000000000000
+(qemu) x /16xb 0x10e9f0
+000000000010e9f0: 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00
+000000000010e9f8: 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00
+(qemu) x /10i 0x1025c0
+0x001025c0:  55                       pushq    %rbp
+0x001025c1:  48 89 e5                 movq     %rsp, %rbp
+0x001025c4:  48 83 ec 0c              subq     $0xc, %rsp
+0x001025c8:  89 7d fc                 movl     %edi, -4(%rbp)
+0x001025cb:  89 75 f8                 movl     %esi, -8(%rbp)
+0x001025ce:  8b 45 fc                 movl     -4(%rbp), %eax
+0x001025d1:  03 45 f8                 addl     -8(%rbp), %eax
+0x001025d4:  89 45 f4                 movl     %eax, -0xc(%rbp)
+0x001025d7:  f4                       hlt
+0x001025d8:  e9 fa ff ff ff           jmp      0x1025d7
+
+(qemu) x /32xb 0x3fea4800
+000000003fea4800: 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00
+000000003fea4808: 0xf4 0xe9 0x10 0x00 0x00 0x00 0x00 0x00
+000000003fea4810: 0x20 0x6a 0x22 0x3f 0xf0 0xe9 0x10 0x00
+000000003fea4818: 0x00 0x00 0x00 0x00 0xf0 0xe9 0x10 0x00
+```
+
+## 結論
+
+ブートローダがカーネルを呼び出す際の引数が順にRCX, RDXで渡っている。
+これはWindows/64 ABIの仕様にあてはまる。ブートローダの作成時のABIを
+変える必要がある（変えたつもりだったが）。
+
+
+## UbuntuではSYSV ABIになっている。
+
+```
+(qemu) info registers
+RAX=0000000000100000 RBX=000000000010cf70 RCX=0000000000000000 RDX=0000000000000001
+RSI=0000000000000003 RDI=0000000000000001 RBP=000000003fea4840 RSP=000000003fea4834   # rdi, rsiで引数が渡っている
+R8 =000000003fea47b4 R9 =000000003fb7b48f R10=000000003fbcd018 R11=fffffffffffffffc
+R12=000000000010da00 R13=0000000000000005 R14=000000003e650018 R15=000000003effef18
+RIP=00000000001021e8 RFL=00000006 [-----P-] CPL=0 II=0 A20=1 SMM=0 HLT=1
+(qemu) x /10i 0x1021d0
+0x00000000001021d0:  push   %rbp
+0x00000000001021d1:  mov    %rsp,%rbp
+0x00000000001021d4:  sub    $0xc,%rsp
+0x00000000001021d8:  mov    %edi,-0x4(%rbp)
+0x00000000001021db:  mov    %esi,-0x8(%rbp)
+0x00000000001021de:  mov    -0x4(%rbp),%esi
+0x00000000001021e1:  add    -0x8(%rbp),%esi
+0x00000000001021e4:  mov    %esi,-0xc(%rbp)
+0x00000000001021e7:  hlt
+0x00000000001021e8:  jmpq   0x1021e7
+```
+
+## ブートローダをsysv-abiにする
+
+### 1. EDK IIを再インストール
+
+[Xcode](https://github.com/tianocore/tianocore.github.io/wiki/Xcode)に沿ってEDK IIを再コンパイルした。
+
+```
+$ brew install mtoc
+$ brew install nasm
+$ brew upgrade nasm
+Warning: nasm 2.15.05 already installed
+$ brew install acpica
+$ brew upgrade acpica
+Warning: acpica 20210105 already installed
+$ brew install qemu
+
+$ nasm -v
+NASM version 2.15.05 compiled on Aug 29 2020
+$ iasl -v
+
+Intel ACPI Component Architecture
+ASL+ Optimizing Compiler/Disassembler version 20210105
+Copyright (c) 2000 - 2021 Intel Corporation
+
+$ qemu-system-x86_64 --version
+QEMU emulator version 5.2.0
+Copyright (c) 2003-2020 Fabrice Bellard and the QEMU Project developers
+$ mtoc
+warning: mtoc: no input file specified
+Usage: mtoc [-subsystem type] [-section_alignment hexvalue] [-align hexvalue] [-version major.minor] [-ddebug_filename] [-u debug_guid] input_Mach-O output_pecoff
+```
+
+**結果は、変わらず**
+
+
+### 2. MikanLoaderPkg/Main.cのコンパイルパラメタを変更
+
+build時のパラメタは`edk2/Conf/tools_def.txt`で指定しているので変更してみる。
+
+#### 2.1 ターゲットを`x86_64-unknown-windows-gnu`から`x86_64-apple-darwin18.7.0`に変更
+
+```
+$ mikan/edk2/Conf/tools_def.txt
+DEFINE CLANGPDB_X64_TARGET           = -target x86_64-apple-darwin18.7.0
+
+$ build
+...
+lld-link: warning: /align specified without /driver; image may not run
+lld-link: error: <root>: undefined symbol: _ModuleEntryPoint
+make: *** [/Users/dspace/mikan/edk2/Build/MikanLoaderX64/DEBUG_CLANGPDB/X64/MikanLoaderPkg/Loader/DEBUG/Loader.dll] Error 1
+
+
+build.py...
+ : error 7000: Failed to execute command
+	make tbuild [/Users/dspace/mikan/edk2/Build/MikanLoaderX64/DEBUG_CLANGPDB/X64/MikanLoaderPkg/Loader]
+
+
+build.py...
+ : error F002: Failed to build module
+	/Users/dspace/mikan/edk2/MikanLoaderPkg/Loader.inf [X64, CLANGPDB, DEBUG]
+
+- Failed -
+```
+
+**エラーでコンパイルできず**
+
+#### 2.2 CFLAGSに`-mabi=sysv`を付ける
+
+```
+$ mikan/edk2/Conf/tools_def.txt
+DEBUG_CLANGPDB_X64_CC_FLAGS         = DEF(CLANGPDB_ALL_CC_FLAGS) -m64 -mabi=sysv "-DEFIAPI=__attribute__((ms_abi))" -mno-red-zone -mcmodel=small -Oz -flto DEF(CLANGPDB_X64_TARGET) -gcodeview  -funwind-tables
+```
+
+**コンパイルはできたが、結果は変わらず**
+
+#### 2.3 "-DEFIAPI=__attribute__((ms_abi))"を取る
+
+```
+$ mikan/edk2/Conf/tools_def.txt
+DEBUG_CLANGPDB_X64_CC_FLAGS         = DEF(CLANGPDB_ALL_CC_FLAGS) -m64 -mabi=sysv -mno-red-zone -mcmodel=small -Oz -flto DEF(CLANGPDB_X64_TARGET) -gcodeview  -funwind-tables
+```
+
+**コンパイルはできたが、結果は変わらず**
+
+**結局**、UEFIアプリとしてのブートローダをsysv-abiにする方法はわからなかった。また、Macでwindows-abiで
+コンパイルする方法も今のところわからない。
+
+しかし、引数を一つしか必要とせず、カーネルからブートローダに戻ることがないのであれば、
+Windows-ABIとSYSV-ABIで重なるレジスタがあればそれを使えばごまかせるのではないかという考えが浮かんだ。
+
+## Windows-ABIとSYSV-ABIにおける呼び出し規約で引数を受け取るレジスタ
+
+- Windows: rcx, rdx, r8, r9
+- SysV:    rdi, rsi, rdx, rcx, r8, r9
+
+### `rdx`で渡される第2引数を第3引数として受け取ればいけるのでは
+
+```
+$ cat MikanLoaderPkg/Main.c
+  typedef void EntryPointType(int a, int b, int c);
+  EntryPointType *entry_point = (EntryPointType *)entry_addr;
+  entry_point(1, 2, 3);
+$ cat kernel/main.cpp
+  extern "C" void KernelMain(int a, int b, int c)
+  {
+      int d;
+      d = c;
+      while (1) __asm__("hlt");
+  }
+
+(qemu) info registers
+RAX=0000000000000002 RBX=0000000000000004 RCX=0000000000000001 RDX=0000000000000002   # <= 第2引数がrdx
+RSI=0000000000000000 RDI=000000000010e9f0 RBP=000000003fe83890 RSP=000000003fe83880
+R8 =0000000000000003 R9 =0000000000000000 R10=000000003f09e0d0 R11=0000000000000001
+R12=000000000010e9f4 R13=000000003e332e20 R14=000000003edee918 R15=000000003e309018
+RIP=00000000001025d8 RFL=00000002 [-------] CPL=0 II=0 A20=1 SMM=0 HLT=1
+(qemu) x /10i 0x1025c0
+0x001025c0:  55                       pushq    %rbp
+0x001025c1:  48 89 e5                 movq     %rsp, %rbp
+0x001025c4:  48 83 ec 10              subq     $0x10, %rsp
+0x001025c8:  89 7d fc                 movl     %edi, -4(%rbp)
+0x001025cb:  89 75 f8                 movl     %esi, -8(%rbp)
+0x001025ce:  89 55 f4                 movl     %edx, -0xc(%rbp)   # 第2引数を第3引数として受け取っている
+0x001025d1:  8b 45 f4                 movl     -0xc(%rbp), %eax
+0x001025d4:  89 45 f0                 movl     %eax, -0x10(%rbp)
+0x001025d7:  f4                       hlt
+0x001025d8:  e9 fa ff ff ff           jmp      0x1025d7
+```
+
+いけてる。そこで次のように変更すると、
+
+```
+$ cat MikanLoaderPkg/Main.c
+  typedef void EntryPointType(UINT64, const struct FrameBufferConfig *, const struct FrameBufferConfig *);
+  EntryPointType *entry_point = (EntryPointType *)entry_addr;
+  entry_point(1, &config, &config);
+$ cat kernel/main.cpp
+  extern "C" void KernelMain(uint64_t* a, const FrameBufferConfig& dummy, const FrameBufferConfig &frame_buffer_config) {}
+```
+
+動いた。
+
+![macでカーネルから描画](images/day5_printk_mac.png)
+
+最終的にはブートローダからカーネルへは引数を4つ渡すようであるが、うまいことに6つ指定すれば
+4つ受け取れそうである。それまでに根本的な解決が見つかることを期待する。
