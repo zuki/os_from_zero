@@ -1018,3 +1018,88 @@ $ cat kernel/main.cpp
 
 最終的にはブートローダからカーネルへは引数を4つ渡すようであるが、うまいことに6つ指定すれば
 4つ受け取れそうである。それまでに根本的な解決が見つかることを期待する。
+
+# 解決法: `__attribute__((sysv_abi))`を関数定義に付ける
+
+「Mac で始める「ゼロからのOS自作入門」の記事にこの件の追記があった。ブートローダからカーネルを
+呼び出す関数の定義に`__attribute__((sysv_abi))`を付ければ良いらしい。早速確かめた。
+
+```
+$ cat Main.c
+  typedef void __attribute__((sysv_abi)) EntryPointType(int, int, int, int, int, int);
+  EntryPointType *entry_point = (EntryPointType *)entry_addr;
+  entry_point(1, 2, 3, 4, 5, 6);
+$ cat main.cpp
+  extern "C" void KernelMain(int a, int b, int c, int d, int e, int f)
+  {
+      int g = 0;
+      g = a + b + c + d + e + f;
+
+(qemu) info registers
+RAX=0000000000000015 RBX=0000000000000004 RCX=0000000000000004 RDX=0000000000000003
+RSI=0000000000000002 RDI=0000000000000001 RBP=000000003fe83810 RSP=000000003fe837f4
+R8 =0000000000000005 R9 =0000000000000006 R10=000000003f09e0d0 R11=0000000000000001
+R12=000000000010ea14 R13=000000003e332e20 R14=000000003edee918 R15=000000003e309018
+RIP=00000000001025f9 RFL=00000012 [----A--] CPL=0 II=0 A20=1 SMM=0 HLT=1
+(qemu) x /19i 0x1025c0
+0x001025c0:  55                       pushq    %rbp
+0x001025c1:  48 89 e5                 movq     %rsp, %rbp
+0x001025c4:  48 83 ec 1c              subq     $0x1c, %rsp
+0x001025c8:  89 7d fc                 movl     %edi, -4(%rbp)     # edi = a = 1
+0x001025cb:  89 75 f8                 movl     %esi, -8(%rbp)     # esi = b = 2
+0x001025ce:  89 55 f4                 movl     %edx, -0xc(%rbp)   # edx = c = 3
+0x001025d1:  89 4d f0                 movl     %ecx, -0x10(%rbp)  # ecx = d = 4
+0x001025d4:  44 89 45 ec              movl     %r8d, -0x14(%rbp)  # r8  = e = 5
+0x001025d8:  44 89 4d e8              movl     %r9d, -0x18(%rbp)  # r9  = f = 6
+0x001025dc:  c7 45 e4 00 00 00 00     movl     $0, -0x1c(%rbp)    # g = 0
+0x001025e3:  8b 45 fc                 movl     -4(%rbp), %eax     # tmp = a
+0x001025e6:  03 45 f8                 addl     -8(%rbp), %eax     # tmp += b
+0x001025e9:  03 45 f4                 addl     -0xc(%rbp), %eax   # tmp += c
+0x001025ec:  03 45 f0                 addl     -0x10(%rbp), %eax  # tmp += d
+0x001025ef:  03 45 ec                 addl     -0x14(%rbp), %eax  # tmp += e
+0x001025f2:  03 45 e8                 addl     -0x18(%rbp), %eax  # tmp += g
+0x001025f5:  89 45 e4                 movl     %eax, -0x1c(%rbp)  # g = tmp
+0x001025f8:  f4                       hlt
+0x001025f9:  e9 fa ff ff ff           jmp      0x1025f8
+```
+
+確かにSYSV ABIの順になっている。
+
+
+**注** これを`-O2`でコンパイルするとgは使われないとみなされ、引数の処理もされない。`-O0`でコンパイルすること。
+
+```
+00000000001024d0 <KernelMain>:
+  1024d0: 55                            pushq   %rbp
+  1024d1: 48 89 e5                      movq    %rsp, %rbp
+  1024d4: 66 2e 0f 1f 84 00 00 00 00 00 nopw    %cs:(%rax,%rax)
+  1024de: 66 90                         nop
+  1024e0: f4                            hlt
+  1024e1: eb fd                         jmp 0x1024e0 <KernelMain+0x10>
+```
+
+逆に、本来の引数を`-O0｀でコンパイルすると以下のエラーとなるので、`-O2`に戻すのを忘れないこと。
+
+```
+ld.lld: error: undefined symbol: __cxa_pure_virtual
+>>> referenced by main.cpp
+>>>               main.o:(vtable for PixelWriter)
+make: *** [kernel.elf] Error 1
+```
+
+本来の関数定義と引数で実行する。
+
+```
+(qemu) info registers
+RAX=000000000000000b RBX=0000000000000258 RCX=0000000000000000 RDX=000000000000004f
+RSI=0000000000000000 RDI=000000000010e9a7 RBP=000000003fe83800 RSP=000000003fe837c0
+R8 =0101010101010101 R9 =000000000010e956 R10=00000000001001c5 R11=000000003fe832da
+R12=0000000000000320 R13=000000003e332e20 R14=000000003fe8b880 R15=000000003fe837c8   # r14 <= rdi
+RIP=0000000000102791 RFL=00000006 [-----P-] CPL=0 II=0 A20=1 SMM=0 HLT=1
+(qemu) x /24xb 0x3fe8b880
+000000003fe8b880: 0x00 0x00 0x00 0x80 0x00 0x00 0x00 0x00     # <= 0x80000000 = frame_buffer
+000000003fe8b888: 0x20 0x03 0x00 0x00 0x20 0x03 0x00 0x00     # <= 0x320, 0x320 = pixels_per_scan_line, horizontal_resolution
+000000003fe8b890: 0x58 0x02 0x00 0x00 0x01 0x00 0x00 0x00     # <= 0x258, 0x01 = vertical_resolution, pixel_format
+```
+
+![__attribute__((sysv_abi))](images/day5_printk_mac_sysv.png)
