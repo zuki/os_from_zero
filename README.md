@@ -149,4 +149,9 @@
 - ディレクトリ操作を可能にする
 - fopen, freadの実装（open, readシステムコールの実装）
 
+## [第26章: アプリでファイル書き込み](day26.md)
+
+- ファイルディスクリプタを抽象化し、stdin, stdout, stderrを実装
+- fwriteの実装（writeシステムコールの実装）
+
 ## [Macでの環境構築](mac.md)
