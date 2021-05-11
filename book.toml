@@ -1,0 +1,6 @@
+[book]
+authors = ["Keiji Suzuki"]
+language = "ja"
+multilingual = false
+src = "src"
+title = "「ゼロからのOS自作入門」自習メモ"
